@@ -1,0 +1,7 @@
+Expansion test EOL
+Ina$$word
+$+$ is smallsh PID: $$ EOL
+$+? is exit status of last forground: $? EOL
+$+! is PID of most recent background proccess: $! EOL
+$+{parameter} is env value of that para: ${USER} EOL
+$+{EMPTY} is env value of that para: ${} EOL

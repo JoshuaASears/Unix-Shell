@@ -1,0 +1,5 @@
+Hello world in 2 words
+Hello\ world in 1 word
+\\path\\test
+#entire line comment
+EOL comment #comment here
