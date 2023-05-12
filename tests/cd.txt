@@ -1,0 +1,8 @@
+CD Test #comment
+cd 1 2 3
+cd nothing
+cd tests
+cd ..
+cd
+exit 69
+cd cs344

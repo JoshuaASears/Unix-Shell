@@ -1,8 +1,0 @@
-${PATH}
-cd tests
-${PATH}
-cd
-${PATH}
-exit
-cd tests
-${PATH}

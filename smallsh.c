@@ -25,9 +25,12 @@ char* read_line = NULL;
 size_t n = 0;
 
 void exit_proc(int total_words, char* word_list[MAX_WORDS]);
+void cd_proc(int total_words, char* word_list[MAX_WORDS]);
+
 void cleanup(void);
+
 int split_words(ssize_t char_count, char* word_list[MAX_WORDS]);
-void expand(char* word_list[MAX_WORDS], int word_index);
+void expand(int word_index, char* word_list[MAX_WORDS]);
 
 int main(int argc, const char* argv[]) {
   smallsh_pid = getpid();
@@ -89,12 +92,12 @@ int main(int argc, const char* argv[]) {
     // expansion
     for (int i = 0; i < total_words; ++i) {
       printf("Word %i: %s -> ", i+1, word_list[i]);
-      expand(word_list, i);
+      expand(i, word_list);
       printf("%s\n", word_list[i]);
     };
      
     if (total_words > 0) {
-    
+          
       // built-ins: exit cd
       int exit_called = strcmp(word_list[0], "exit");
       int cd_called = strcmp(word_list[0], "cd");
@@ -103,8 +106,11 @@ int main(int argc, const char* argv[]) {
         exit_proc(total_words, word_list);
         goto CLEAN_WORD_LIST;  
       } else if (cd_called == 0) {
-        //chdir(2)
-        break;
+        char s[100];
+        printf("cwd: %s\n", getcwd(s, 100));
+        cd_proc(total_words, word_list);
+        printf("cwd: %s\n", getcwd(s, 100));
+        goto CLEAN_WORD_LIST;
       };
     
       // parsing (in child)
@@ -117,6 +123,7 @@ int main(int argc, const char* argv[]) {
       // execution
 
       // waiting
+
 CLEAN_WORD_LIST:;
       for (int i = 0; i < total_words; ++i) {
         free(word_list[i]);
@@ -141,28 +148,67 @@ void cleanup(void){
 /*** build in commands: exit, cd ***/
 
 /* 
- * checks for valid argments for exit call
+ * checks for valid arguments for exit call
  * prints to std error for invalid arguments
  * */
 void exit_proc(int total_words, char* word_list[MAX_WORDS]){
+  
+  // too many arguments
   if (total_words > 2) {
     errno = E2BIG;
     perror("exit");
     errno = 0;
     return;
+
+  // valid number of arguments
   } else if (total_words == 2) {
     int user_exit_status = atoi(word_list[1]);
+    
+    // invalid argument type
     if (!user_exit_status) {
       errno = EINVAL;
       perror("exit");
       errno = 0;
       return;
-    };  
-    fg_exit_status = user_exit_status;
-  };
+    
+  // valid exit calls
+    } else {  
+      fg_exit_status = user_exit_status;
+    };
+   };
   exiting = true;
-  return;
 }; 
+
+/*
+ * checks for valid arguments for exit call
+ * prints to std error for invalid arguments
+ * */
+void cd_proc(int total_words, char* word_list[MAX_WORDS]){
+  // too many artuments
+  if (total_words > 2) {
+    errno = E2BIG;
+    perror("cd");
+    errno = 0;
+
+  // valid number of arguments
+  } else if (total_words == 2) {
+    
+    // user defined path 
+    chdir(word_list[1]);
+    if (errno) {
+      perror("cd");
+      errno = 0;
+    };
+  
+  // no args = root directory
+  } else {
+    chdir(getenv("HOME"));
+    if (errno) {
+      perror("cd");
+      errno = 0;
+    };
+  };
+};
 
 
 /*** string augmentation functions for stdio/file input ***/
@@ -223,7 +269,7 @@ int split_words(ssize_t char_count, char* word_list[MAX_WORDS]) {
 /* 
  * expands words for special character ($) variables
  * */
-void expand (char* word_list[MAX_WORDS], int word_index) {
+void expand (int word_index, char* word_list[MAX_WORDS]) {
   
   // get word length
   size_t word_length = 0;
@@ -268,10 +314,9 @@ void expand (char* word_list[MAX_WORDS], int word_index) {
         int s3_len = word_length - stop;
         char* after_splice = strndup(&word_list[word_index][stop+1], s3_len);
         
+        // splice_string
         int splice_size = 0;
         int splice_start = 0;
-
-        // splice_string
         if (word_list[word_index][start+1] != 0x7b) {
           splice_size = stop - start + 1;
           splice_start = start;
@@ -280,10 +325,9 @@ void expand (char* word_list[MAX_WORDS], int word_index) {
           splice_start = start + 2;
         };
         if (splice_size > 0) { 
+          // character case handling
           char* splice = strndup(&word_list[word_index][splice_start], splice_size);
           char replacement[255] = {'\0'};
-
-          // character case handling
           if (splice[1] == '$') {
 
           // $$: replace with PID
