@@ -24,13 +24,19 @@ FILE* in_file;
 char* read_line = NULL;
 size_t n = 0;
 
-
-void exit_proc();
+void exit_proc(int total_words, char* word_list[MAX_WORDS]);
+void cleanup(void);
 int split_words(ssize_t char_count, char* word_list[MAX_WORDS]);
 void expand(char* word_list[MAX_WORDS], int word_index);
 
 int main(int argc, const char* argv[]) {
   smallsh_pid = getpid();
+
+  // register exit handler
+  int handler_1 = atexit(cleanup);
+  if (handler_1) {
+    err(EXIT_FAILURE, "Exit handler not set");
+  };
   
   // too many arguments 
   if (argc > 2) {
@@ -70,8 +76,7 @@ int main(int argc, const char* argv[]) {
     // get line of input 
     ssize_t char_read = getline(&read_line, &n, in_file);
     if (char_read == -1){
-      perror("main: rpl: end of file\n");
-      goto EXIT;
+      exit(fg_exit_status); 
     } else if (errno == EINVAL){
       err(EXIT_FAILURE, "main getline failed");
     };
@@ -88,61 +93,79 @@ int main(int argc, const char* argv[]) {
       printf("%s\n", word_list[i]);
     };
      
-    // built-ins: exit cd
-    int built_in_exit = strcmp(word_list[0], "exit");
-    int built_in_cd = strcmp(word_list[0], "cd");
-    if (built_in_exit == 0) {
-      if (total_words > 2) {
-        errno = E2BIG;
-        perror("exit");
-        errno = 0;
-        goto CLEAN_WORD_LIST;
-      } else if (total_words == 2) {
-        int user_exit_status = atoi(word_list[1]);
-        if (!user_exit_status) {
-          errno = EINVAL; 
-          perror("exit");
-          errno = 0;
-          goto CLEAN_WORD_LIST;
-        };
+    if (total_words > 0) {
+    
+      // built-ins: exit cd
+      int exit_called = strcmp(word_list[0], "exit");
+      int cd_called = strcmp(word_list[0], "cd");
+
+      if (exit_called == 0) {
+        exit_proc(total_words, word_list);
+        goto CLEAN_WORD_LIST;  
+      } else if (cd_called == 0) {
+        //chdir(2)
+        break;
       };
-      exiting = true;
-      goto CLEAN_WORD_LIST;  
-    } else if (built_in_cd == 0) {
-      //chdir(2)
-      break;
-    };
     
-    // parsing (in child)
-      // if last word is & then entire line is background
-      // > = write
-      // < = read
-      // >> = append
-      // any word following >, <, >> is considered a path operator
+      // parsing (in child)
+        // if last word is & then entire line is background
+        // > = write
+        // < = read
+        // >> = append
+        // any word following >, <, >> is considered a path operator
     
-    // execution
+      // execution
 
-    // waiting
+      // waiting
 CLEAN_WORD_LIST:;
-    for (int i = 0; i < total_words; ++i) {
-      free(word_list[i]);
+      for (int i = 0; i < total_words; ++i) {
+        free(word_list[i]);
+      };
+      if (exiting) {
+        exit(fg_exit_status); 
+      };
     };
-  if (exiting) {
-    goto EXIT;
   };
-  //return to rpl
-  };
+};
 
-  // cleanup and exit
-EXIT:;
+
+/* exit handlers */
+void cleanup(void){
   free(read_line);
   fclose(in_file);
   if (errno) {
     err(EXIT_FAILURE, "main fclose failed");
   };
-  return fg_exit_status;
 };
 
+/*** build in commands: exit, cd ***/
+
+/* 
+ * checks for valid argments for exit call
+ * prints to std error for invalid arguments
+ * */
+void exit_proc(int total_words, char* word_list[MAX_WORDS]){
+  if (total_words > 2) {
+    errno = E2BIG;
+    perror("exit");
+    errno = 0;
+    return;
+  } else if (total_words == 2) {
+    int user_exit_status = atoi(word_list[1]);
+    if (!user_exit_status) {
+      errno = EINVAL;
+      perror("exit");
+      errno = 0;
+      return;
+    };  
+    fg_exit_status = user_exit_status;
+  };
+  exiting = true;
+  return;
+}; 
+
+
+/*** string augmentation functions for stdio/file input ***/
 
 /* 
  * splits words based on white space
@@ -196,7 +219,6 @@ int split_words(ssize_t char_count, char* word_list[MAX_WORDS]) {
    };
   return word_count;
 };
-
 
 /* 
  * expands words for special character ($) variables

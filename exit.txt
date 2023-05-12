@@ -1,5 +1,5 @@
 Exit test
 exit 1 ifj 1
 exit fdksa 
-exit
+exit 8
 
