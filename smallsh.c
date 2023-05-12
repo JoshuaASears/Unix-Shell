@@ -18,13 +18,19 @@
 pid_t smallsh_pid;
 int fg_exit_status;
 pid_t bg_pid;
+bool exiting = false;
 
-int split_words(char* lineptr, ssize_t char_count, char* word_list[MAX_WORDS]);
+FILE* in_file;
+char* read_line = NULL;
+size_t n = 0;
+
+
+void exit_proc();
+int split_words(ssize_t char_count, char* word_list[MAX_WORDS]);
 void expand(char* word_list[MAX_WORDS], int word_index);
 
 int main(int argc, const char* argv[]) {
   smallsh_pid = getpid();
-  FILE* in_file;
   
   // too many arguments 
   if (argc > 2) {
@@ -52,20 +58,18 @@ int main(int argc, const char* argv[]) {
       fcntl(fd, F_SETFD, flags);
     };
   };
-
-  
-  char* in_line = NULL;
-  size_t n = 0;
   
   //repl
   for (int i = 1;;i++) {
+    
+    // reset tracking variables
     fg_exit_status = 0;
     bg_pid = 0;
     printf("REPL %d\n", i);
     
     // get line of input 
-    ssize_t n_read = getline(&in_line, &n, in_file);
-    if (n_read == -1){
+    ssize_t char_read = getline(&read_line, &n, in_file);
+    if (char_read == -1){
       perror("main: rpl: end of file\n");
       goto EXIT;
     } else if (errno == EINVAL){
@@ -73,39 +77,71 @@ int main(int argc, const char* argv[]) {
     };
     
     // word splitting
-    char* words[MAX_WORDS] = {0};
-    int total_words = split_words(in_line, n_read, words);
+    char* word_list[MAX_WORDS] = {0};
+    int total_words = split_words(char_read, word_list);
+    printf("total_words = %d\n", total_words);
+
     // expansion
     for (int i = 0; i < total_words; ++i) {
-      printf("Word %i: %s -> ", i+1, words[i]);
-      expand(words, i);
-      printf("%s\n", words[i]);
+      printf("Word %i: %s -> ", i+1, word_list[i]);
+      expand(word_list, i);
+      printf("%s\n", word_list[i]);
     };
-    // parsing
-    // if last word is & then entire line is background
-    // > = write
-    // < = read
-    // >> = append
-    // any word following >, <, >> is considered a path operator
+     
+    // built-ins: exit cd
+    int built_in_exit = strcmp(word_list[0], "exit");
+    int built_in_cd = strcmp(word_list[0], "cd");
+    if (built_in_exit == 0) {
+      if (total_words > 2) {
+        errno = E2BIG;
+        perror("exit");
+        errno = 0;
+        goto CLEAN_WORD_LIST;
+      } else if (total_words == 2) {
+        int user_exit_status = atoi(word_list[1]);
+        if (!user_exit_status) {
+          errno = EINVAL; 
+          perror("exit");
+          errno = 0;
+          goto CLEAN_WORD_LIST;
+        };
+      };
+      exiting = true;
+      goto CLEAN_WORD_LIST;  
+    } else if (built_in_cd == 0) {
+      //chdir(2)
+      break;
+    };
+    
+    // parsing (in child)
+      // if last word is & then entire line is background
+      // > = write
+      // < = read
+      // >> = append
+      // any word following >, <, >> is considered a path operator
+    
     // execution
-    // waiting
-    for (int i = 0; i < total_words; ++i) {
-      free(words[i]);
-    };
 
+    // waiting
+CLEAN_WORD_LIST:;
+    for (int i = 0; i < total_words; ++i) {
+      free(word_list[i]);
+    };
+  if (exiting) {
+    goto EXIT;
+  };
+  //return to rpl
   };
 
   // cleanup and exit
 EXIT:;
-  free(in_line);
+  free(read_line);
   fclose(in_file);
   if (errno) {
     err(EXIT_FAILURE, "main fclose failed");
   };
-  return EXIT_SUCCESS;
+  return fg_exit_status;
 };
-
-
 
 
 /* 
@@ -113,14 +149,14 @@ EXIT:;
  * special character handling for comment (#) and escape(/) characters
  * returns number of words split from line
  * */
-int split_words(char* lineptr, ssize_t char_count, char* word_list[MAX_WORDS]) {
+int split_words(ssize_t char_count, char* word_list[MAX_WORDS]) {
   
   int word_count = 0;
   size_t word_length = 0;
   bool backslash = false;
 
   for (int i = 0; i < char_count; ++i) {
-    int c = lineptr[i];
+    int c = read_line[i];
 
     // backslash: escape character
     if (c == '\\' && !backslash) {
@@ -160,8 +196,6 @@ int split_words(char* lineptr, ssize_t char_count, char* word_list[MAX_WORDS]) {
    };
   return word_count;
 };
-
-
 
 
 /* 
@@ -225,7 +259,7 @@ void expand (char* word_list[MAX_WORDS], int word_index) {
         };
         if (splice_size > 0) { 
           char* splice = strndup(&word_list[word_index][splice_start], splice_size);
-          char replacement[100] = {'\0'};
+          char replacement[255] = {'\0'};
 
           // character case handling
           if (splice[1] == '$') {
@@ -266,12 +300,3 @@ void expand (char* word_list[MAX_WORDS], int word_index) {
   };
 };
 
-
-
-/* features */
-// built-in commands: exit, cd
-// non build=in commands using appropriate EXEC(3)
-// redirection operators: <, >, >>
-// use "&" to run commands in background
-// custom behavior for signals: SIGINT, SIGTSTP
-// all errors print value of $? to stderr
