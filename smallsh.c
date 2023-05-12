@@ -106,10 +106,7 @@ int main(int argc, const char* argv[]) {
         exit_proc(total_words, word_list);
         goto CLEAN_WORD_LIST;  
       } else if (cd_called == 0) {
-        char s[100];
-        printf("cwd: %s\n", getcwd(s, 100));
         cd_proc(total_words, word_list);
-        printf("cwd: %s\n", getcwd(s, 100));
         goto CLEAN_WORD_LIST;
       };
     
