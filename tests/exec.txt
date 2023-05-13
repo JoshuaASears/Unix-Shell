@@ -1,0 +1,5 @@
+ls
+cd tests
+ls
+cd ..
+ls

@@ -64,7 +64,7 @@ int main(int argc, const char* argv[]) {
     } else {
       fd = fileno(in_file);
       int flags = fcntl(fd, F_GETFD);
-      flags |= O_CLOEXEC;
+      flags |= FD_CLOEXEC;
       fcntl(fd, F_SETFD, flags);
     };
   };
@@ -92,12 +92,10 @@ int main(int argc, const char* argv[]) {
     if (total_words > 0) {
           
       // built-ins: exit cd
-      int exit_called = strcmp(word_list[0], "exit");
-      int cd_called = strcmp(word_list[0], "cd");
-      if (exit_called == 0) {
+      if (!(strcmp(word_list[0], "exit"))) {
         exit_proc(total_words, word_list);
         goto CLEAN_WORD_LIST;  
-      } else if (cd_called == 0) {
+      } else if (!(strcmp(word_list[0], "cd"))) {
         cd_proc(total_words, word_list);
         goto CLEAN_WORD_LIST;
       };
@@ -106,6 +104,7 @@ int main(int argc, const char* argv[]) {
      
       // non built-in: fork to exec and parsing
       pid_t child_pid;
+      int child_status;
       child_pid = fork();
       switch(child_pid) {
         case -1:
@@ -113,26 +112,116 @@ int main(int argc, const char* argv[]) {
           errno = 0;
           break;
         case 0:
-          // loop traversing arguments
-          for (int i = 0; i < total_words; i++) {
+
           // parsing
-            // if last word is & then entire line is background
-            // > = write
-            // < = read
-            // >> = append
-            // any word following >, <, >> is considered a path operator
-          
-          // execution
-          // execvp with error handling
+          for (int i = 0; i < total_words; i++) {
+            
+            // < = read token
+            if (!(strcmp(word_list[i], "<"))) {
+              i++;
+              if (i < total_words){
+                int redirect = open(word_list[i], O_RDONLY);
+                if (redirect == -1) {
+                  perror("redirect: open");
+                  exit(errno);
+                };
+                int redirect_fd = dup2(redirect, 0);
+                if (redirect_fd == -1) {
+                  perror("dup2");
+                  exit(errno);
+                };
+              } else {
+                errno = ENOENT;
+                exit(errno);
+              };
+
+            // > = write token
+            } else if (!(strcmp(word_list[i], ">"))) {
+              i++;
+              if (i < total_words){
+                int redirect = open(word_list[i], O_RDWR | O_CREAT, 0777);
+                if (redirect == -1) {
+                  perror("redirect: open");
+                  exit(errno);
+                };
+                int redirect_fd = dup2(redirect, 1);
+                if (redirect_fd == -1) {
+                  perror("dup2");
+                  exit(errno);
+                };
+              } else {
+                errno = ENOENT;
+                exit(errno);
+              };
+
+            // >> = append token
+            } else if (!(strcmp(word_list[i], ">>"))) {
+              i++;
+              if (i < total_words){
+                int redirect = open(word_list[i], O_RDWR | O_APPEND | O_CREAT, 0777);
+                if (redirect == -1) {
+                  perror("redirect: open");
+                  exit(errno);
+                };
+                int redirect_fd = dup2(redirect, 1);
+                if (redirect_fd == -1) {
+                  perror("dup2");
+                  exit(errno);
+                };
+              } else {
+                errno = ENOENT;
+                exit(errno);
+              };
+
+            // & = background token
+            } else if (!(strcmp(word_list[i], "&"))) {
+              i++;
+
+            // execution
+            } else {
+              char* command = word_list[i];
+              char* arguments[MAX_WORDS] = {0};
+              int arg_i = 0;
+              i++;
+              
+              // add args to cmd
+              while (strcmp(word_list[i], "<") &&
+                  strcmp(word_list[i], ">") &&
+                  strcmp(word_list[i], ">>") &&
+                  strcmp(word_list[i], "&")) {
+                arguments[arg_i] = word_list[i];
+                i++;
+              };
+              
+              execvp(command, arguments);
+              perror("exec");
+              exit(errno);
+            }; 
           };
           
-          exit(0);
+          exiting = true;
+          goto CLEAN_WORD_LIST;
         
         default:
           // waiting
           // wait for foreground
-          //waitpid(child_pid, ); 
-          break;
+          if ((strcmp(word_list[total_words - 1], "&"))) {
+            child_pid = waitpid(child_pid, &child_status, 0);
+            
+            // set $? to exit stataus of foreground
+            if (WIFEXITED(child_pid)) {
+              fg_exit_status = WEXITSTATUS(child_pid);
+            } else {
+            
+            // if terminated by signal set $? to 128 + number of signal
+              fg_exit_status = 128 + WTERMSIG(child_pid);
+            };
+
+          // default behavior: background indicated
+          } else {
+            // set $! to bg pid
+            bg_pid = child_pid;
+          };
       };
 
 CLEAN_WORD_LIST:;

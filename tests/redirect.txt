@@ -1,0 +1,27 @@
+echo hello world
+echo "hello world"
+ls                  #comment
+> abc > file1 ls
+ls
+echo hello world > file2
+cat file2
+cat < file2         #comment
+cat file2 > file3
+cat asdfd
+asdfs
+echo $?
+ls
+asdf > file4 ls
+echo $?
+ls
+>file5
+ls
+echo goodbye
+echo $?
+exit 1 2 3
+echo $?
+exit js
+cd notadir
+echo $?
+exit
+echo if this prints it's wrong
