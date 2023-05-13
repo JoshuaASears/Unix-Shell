@@ -1,16 +1,17 @@
 #define _POSIX_C_SOURCE 200809L
 #define _GNU_SOURCE
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <errno.h>
-#include <err.h>
-#include <fcntl.h>
-#include <string.h>
-#include <unistd.h>
 #include <ctype.h>
+#include <err.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 #define MAX_WORDS 512
 
@@ -21,6 +22,7 @@ pid_t bg_pid;
 bool exiting = false;
 
 FILE* in_file;
+int fd;
 char* read_line = NULL;
 size_t n = 0;
 
@@ -34,11 +36,13 @@ void expand(int word_index, char* word_list[MAX_WORDS]);
 
 int main(int argc, const char* argv[]) {
   smallsh_pid = getpid();
-
+  fg_exit_status = 0;
+  bg_pid = 0;
+  
   // register exit handler
   int handler_1 = atexit(cleanup);
   if (handler_1) {
-    err(EXIT_FAILURE, "Exit handler not set");
+    err(EXIT_FAILURE, "main atexit failed");
   };
   
   // too many arguments 
@@ -48,20 +52,17 @@ int main(int argc, const char* argv[]) {
   
   // interactive mode (stdin) 
   } else if (argc == 1) {
-    printf("No file, opening interactive mode.\n");
     in_file = stdin;
     errno = ENOSYS;
     err(EXIT_FAILURE, "Interactive mode");
 
   // file mode
   } else {
-    printf("File detected, opening file...\n");
     in_file = fopen(argv[1], "r");
     if (errno) {
       err(EXIT_FAILURE, "main fopen failed");
     } else {
-      printf("Open successful.\n");
-      int fd = fileno(in_file);
+      fd = fileno(in_file);
       int flags = fcntl(fd, F_GETFD);
       flags |= O_CLOEXEC;
       fcntl(fd, F_SETFD, flags);
@@ -69,12 +70,7 @@ int main(int argc, const char* argv[]) {
   };
   
   //repl
-  for (int i = 1;;i++) {
-    
-    // reset tracking variables
-    fg_exit_status = 0;
-    bg_pid = 0;
-    printf("REPL %d\n", i);
+  for (;;) {
     
     // get line of input 
     ssize_t char_read = getline(&read_line, &n, in_file);
@@ -87,13 +83,10 @@ int main(int argc, const char* argv[]) {
     // word splitting
     char* word_list[MAX_WORDS] = {0};
     int total_words = split_words(char_read, word_list);
-    printf("total_words = %d\n", total_words);
 
     // expansion
     for (int i = 0; i < total_words; ++i) {
-      printf("Word %i: %s -> ", i+1, word_list[i]);
       expand(i, word_list);
-      printf("%s\n", word_list[i]);
     };
      
     if (total_words > 0) {
@@ -101,7 +94,6 @@ int main(int argc, const char* argv[]) {
       // built-ins: exit cd
       int exit_called = strcmp(word_list[0], "exit");
       int cd_called = strcmp(word_list[0], "cd");
-
       if (exit_called == 0) {
         exit_proc(total_words, word_list);
         goto CLEAN_WORD_LIST;  
@@ -109,17 +101,39 @@ int main(int argc, const char* argv[]) {
         cd_proc(total_words, word_list);
         goto CLEAN_WORD_LIST;
       };
-    
-      // parsing (in child)
-        // if last word is & then entire line is background
-        // > = write
-        // < = read
-        // >> = append
-        // any word following >, <, >> is considered a path operator
-    
-      // execution
-
-      // waiting
+      
+      // TODO reset signals here before calling child
+     
+      // non built-in: fork to exec and parsing
+      pid_t child_pid;
+      child_pid = fork();
+      switch(child_pid) {
+        case -1:
+          perror("main fork failed");
+          errno = 0;
+          break;
+        case 0:
+          // loop traversing arguments
+          for (int i = 0; i < total_words; i++) {
+          // parsing
+            // if last word is & then entire line is background
+            // > = write
+            // < = read
+            // >> = append
+            // any word following >, <, >> is considered a path operator
+          
+          // execution
+          // execvp with error handling
+          };
+          
+          exit(0);
+        
+        default:
+          // waiting
+          // wait for foreground
+          //waitpid(child_pid, ); 
+          break;
+      };
 
 CLEAN_WORD_LIST:;
       for (int i = 0; i < total_words; ++i) {
@@ -136,9 +150,11 @@ CLEAN_WORD_LIST:;
 /* exit handlers */
 void cleanup(void){
   free(read_line);
-  fclose(in_file);
-  if (errno) {
-    err(EXIT_FAILURE, "main fclose failed");
+  if (fd) {
+    fclose(in_file);
+    if (errno) {
+      err(EXIT_FAILURE, "cleanup fclose failed");
+    };
   };
 };
 
