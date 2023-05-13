@@ -26,13 +26,14 @@ FILE* in_file;
 int fd;
 char* read_line = NULL;
 size_t n = 0;
+char* word_list[MAX_WORDS] = {0};
 
-void exit_proc(int total_words, char* word_list[MAX_WORDS]);
-void cd_proc(int total_words, char* word_list[MAX_WORDS]);
+void exit_proc(int total_words);
+void cd_proc(int total_words);
 
 void cleanup(void);
 
-int split_words(ssize_t char_count, char* word_list[MAX_WORDS]);
+int split_words(ssize_t char_count);
 void expand(char* word);
 
 int main(int argc, const char* argv[]) {
@@ -46,6 +47,7 @@ int main(int argc, const char* argv[]) {
     err(EXIT_FAILURE, "main atexit failed");
   };
   
+  bool interactive_mode = false;
   // too many arguments 
   if (argc > 2) {
     errno = E2BIG;
@@ -54,6 +56,7 @@ int main(int argc, const char* argv[]) {
   // interactive mode (stdin) 
   } else if (argc == 1) {
     in_file = stdin;
+    interactive_mode = true;
 
   // file mode
   } else {
@@ -78,7 +81,9 @@ int main(int argc, const char* argv[]) {
     //fprintf(stderr, "Child process %jd done. Exit status %d.\n", (intmax_t) <pid>, <exit_status>);
     //fprintf(stderr, "Child process %jd done. Signaled %d.\n", (intmax_t) <pid>, <signal number>);
     
-    fprintf(stderr, "%s", prompt);
+    if (interactive_mode) {
+      fprintf(stderr, "%s", prompt);
+    };
 
     // get line of input 
     ssize_t char_read = getline(&read_line, &n, in_file);
@@ -89,30 +94,31 @@ int main(int argc, const char* argv[]) {
     };
     
     // word splitting
-    char* word_list[MAX_WORDS] = {0};
-    int total_words = split_words(char_read, word_list);
+    
+    int total_words = split_words(char_read);
 
     // expansion
+    //printf("total_words = %i\n", total_words);
     for (int i = 0; i < total_words; ++i) {
       expand(word_list[i]);
+      //printf("%s, ", word_list[i]);
     };
-    
-    char* arguments[MAX_WORDS] = {0};
-    int arg_i = 0;
+    //printf("\n");
+    int exec_i = 0;
     if (total_words > 0) {
           
       // built-ins: exit cd
       if (!(strcmp(word_list[0], "exit"))) {
-        exit_proc(total_words, word_list);
-        goto CLEAN_WORD_LIST;  
+        exit_proc(total_words);
       } else if (!(strcmp(word_list[0], "cd"))) {
-        cd_proc(total_words, word_list);
-        goto CLEAN_WORD_LIST;
-      };
+        cd_proc(total_words);
+     
+
+      // non built-in: fork to exec and parsing
+      } else {
       
       // TODO reset signals here before calling child
      
-      // non built-in: fork to exec and parsing
       pid_t child_pid;
       int child_status;
       child_pid = fork();
@@ -184,21 +190,28 @@ int main(int argc, const char* argv[]) {
 
             // add args to cmd
             } else {
-              arguments[arg_i] = word_list[i];
-              arg_i++; 
+              word_list[exec_i] = word_list[i];
+              exec_i++; 
             };
           };
             // execution
-            if (arg_i > 0) {
-              //for (int x = 0; x < arg_i; x++) printf("arg[%i] = %s\n", x, arguments[x]);
-              execvp(arguments[0], arguments);
+            if (exec_i > 0) {
+              word_list[exec_i] = NULL;
+              exec_i++;
+              /*
+              printf("exec_i = %i\n", exec_i);
+              for (int x = 0; x < exec_i; x++) {
+                printf("%s, ", word_list[x]);
+              }; 
+              printf("\n");
+              */
+              execvp(word_list[0], word_list);
               perror("exec");
               fg_exit_status = errno;
               goto LEAVE_FORK;
             };
         LEAVE_FORK:;
-          exiting = true;
-          goto CLEAN_WORD_LIST;
+          exit(fg_exit_status);
         
         default:
           // waiting
@@ -221,23 +234,21 @@ int main(int argc, const char* argv[]) {
             bg_pid = child_pid;
           };
       };
-
-CLEAN_WORD_LIST:;
-      for (int i = 0; i < total_words; ++i) {
-        free(word_list[i]);
-      };
-      if (exiting) {
-        exit(fg_exit_status); 
       };
     };
   };
 };
 
-
 /* exit handlers */
 void cleanup(void){
   free(read_line);
-  if (fd && (smallsh_pid == getpid())) {
+  for (int x = 0; x < MAX_WORDS; x++) {
+    word_list[x] = NULL;
+  };
+  if (smallsh_pid == getpid()) {
+    for (int x = 0; x < MAX_WORDS; x++) {
+      free(word_list[x]);
+    };
     fclose(in_file);
     if (errno) {
       err(EXIT_FAILURE, "cleanup fclose failed");
@@ -251,7 +262,7 @@ void cleanup(void){
  * checks for valid arguments for exit call
  * prints to std error for invalid arguments
  * */
-void exit_proc(int total_words, char* word_list[MAX_WORDS]){
+void exit_proc(int total_words){
   
   // too many arguments
   if (total_words > 2) {
@@ -278,14 +289,14 @@ void exit_proc(int total_words, char* word_list[MAX_WORDS]){
       fg_exit_status = user_exit_status;
     };
    };
-  exiting = true;
+  exit(fg_exit_status);
 }; 
 
 /*
  * checks for valid arguments for exit call
  * prints to std error for invalid arguments
  * */
-void cd_proc(int total_words, char* word_list[MAX_WORDS]){
+void cd_proc(int total_words){
   // too many artuments
   if (total_words > 2) {
     errno = E2BIG;
@@ -322,7 +333,7 @@ void cd_proc(int total_words, char* word_list[MAX_WORDS]){
  * special character handling for comment (#) and escape(/) characters
  * returns number of words split from line
  * */
-int split_words(ssize_t char_count, char* word_list[MAX_WORDS]) {
+int split_words(ssize_t char_count) {
   
   int word_count = 0;
   size_t word_length = 0;
