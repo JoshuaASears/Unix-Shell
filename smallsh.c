@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -32,7 +33,7 @@ void cd_proc(int total_words, char* word_list[MAX_WORDS]);
 void cleanup(void);
 
 int split_words(ssize_t char_count, char* word_list[MAX_WORDS]);
-void expand(int word_index, char* word_list[MAX_WORDS]);
+void expand(char* word);
 
 int main(int argc, const char* argv[]) {
   smallsh_pid = getpid();
@@ -53,8 +54,6 @@ int main(int argc, const char* argv[]) {
   // interactive mode (stdin) 
   } else if (argc == 1) {
     in_file = stdin;
-    errno = ENOSYS;
-    err(EXIT_FAILURE, "Interactive mode");
 
   // file mode
   } else {
@@ -70,7 +69,17 @@ int main(int argc, const char* argv[]) {
   };
   
   //repl
+  char* prompt = getenv("PS1");
+  expand(prompt);
   for (;;) {
+
+    // manage background process
+    
+    //fprintf(stderr, "Child process %jd done. Exit status %d.\n", (intmax_t) <pid>, <exit_status>);
+    //fprintf(stderr, "Child process %jd done. Signaled %d.\n", (intmax_t) <pid>, <signal number>);
+    
+    fprintf(stderr, "%s", prompt);
+
     // get line of input 
     ssize_t char_read = getline(&read_line, &n, in_file);
     if (char_read == -1){
@@ -85,7 +94,7 @@ int main(int argc, const char* argv[]) {
 
     // expansion
     for (int i = 0; i < total_words; ++i) {
-      expand(i, word_list);
+      expand(word_list[i]);
     };
     
     char* arguments[MAX_WORDS] = {0};
@@ -364,11 +373,11 @@ int split_words(ssize_t char_count, char* word_list[MAX_WORDS]) {
 /* 
  * expands words for special character ($) variables
  * */
-void expand (int word_index, char* word_list[MAX_WORDS]) {
+void expand (char *word) {
   
   // get word length
   size_t word_length = 0;
-  for (int count = 0; word_list[word_index][count] != '\0'; count++) {
+  for (int count = 0; word[count] != '\0'; count++) {
     word_length++;
   };
 
@@ -377,42 +386,41 @@ void expand (int word_index, char* word_list[MAX_WORDS]) {
 
   // iterate over word
   for (int i = 0; i < word_length; i++) {
-    if (word_list[word_index][i] == '$' && i+1 < word_length) {
+    if (word[i] == '$' && i+1 < word_length) {
       start = i;
       i++;
 
       // find special character sequences
-      if (word_list[word_index][i] == 0x7b) {
+      if (word[i] == 0x7b) {
         while (i < word_length) {
           i++;
-          if (word_list[word_index][i] == '}') {
+          if (word[i] == '}') {
             stop = i;
             break;
           };
         };
       } else if (
-          word_list[word_index][i] == '$' ||
-          word_list[word_index][i] == '!' ||
-          word_list[word_index][i] == '?') {
+          word[i] == '$' ||
+          word[i] == '!' ||
+          word[i] == '?') {
           stop = i;
       };
 
       // if special character start and stop indexes have been found
       // splice out special characters
       if (stop) {
-
         // copy before splice string
         int s1_len = start;
-        char* before_splice = strndup(word_list[word_index], s1_len);
+        char* before_splice = strndup(word, s1_len);
         
         // copy after splice string
         int s3_len = word_length - stop;
-        char* after_splice = strndup(&word_list[word_index][stop+1], s3_len);
+        char* after_splice = strndup(&word[stop+1], s3_len);
         
         // splice_string
         int splice_size = 0;
         int splice_start = 0;
-        if (word_list[word_index][start+1] != 0x7b) {
+        if (word[start+1] != 0x7b) {
           splice_size = stop - start + 1;
           splice_start = start;
         } else {
@@ -421,7 +429,7 @@ void expand (int word_index, char* word_list[MAX_WORDS]) {
         };
         if (splice_size > 0) { 
           // character case handling
-          char* splice = strndup(&word_list[word_index][splice_start], splice_size);
+          char* splice = strndup(&word[splice_start], splice_size);
           char replacement[255] = {'\0'};
           if (splice[1] == '$') {
 
@@ -445,10 +453,10 @@ void expand (int word_index, char* word_list[MAX_WORDS]) {
         
           // word_list[word_index] realloc to the three items above
           int s2_len = strlen(replacement); 
-          word_list[word_index] = realloc(word_list[word_index], sizeof s1_len + s2_len + s3_len + 1);
-          strcpy(word_list[word_index], before_splice);
-          strcpy(&word_list[word_index][s1_len], replacement);
-          strcpy(&word_list[word_index][s1_len+s2_len], after_splice);
+          word = realloc(word, sizeof s1_len + s2_len + s3_len + 1);
+          strcpy(word, before_splice);
+          strcpy(&word[s1_len], replacement);
+          strcpy(&word[s1_len+s2_len], after_splice);
         
           // cleanup
           free(splice);
