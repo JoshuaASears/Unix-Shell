@@ -71,7 +71,6 @@ int main(int argc, const char* argv[]) {
   
   //repl
   for (;;) {
-    
     // get line of input 
     ssize_t char_read = getline(&read_line, &n, in_file);
     if (char_read == -1){
@@ -88,7 +87,9 @@ int main(int argc, const char* argv[]) {
     for (int i = 0; i < total_words; ++i) {
       expand(i, word_list);
     };
-     
+    
+    char* arguments[MAX_WORDS] = {0};
+    int arg_i = 0;
     if (total_words > 0) {
           
       // built-ins: exit cd
@@ -108,14 +109,12 @@ int main(int argc, const char* argv[]) {
       child_pid = fork();
       switch(child_pid) {
         case -1:
-          perror("main fork failed");
-          errno = 0;
-          break;
+          err(EXIT_FAILURE, "main fork failed");
         case 0:
 
+          fg_exit_status = 0;
           // parsing
           for (int i = 0; i < total_words; i++) {
-            
             // < = read token
             if (!(strcmp(word_list[i], "<"))) {
               i++;
@@ -123,16 +122,15 @@ int main(int argc, const char* argv[]) {
                 int redirect = open(word_list[i], O_RDONLY);
                 if (redirect == -1) {
                   perror("redirect: open");
-                  exit(errno);
+                  fg_exit_status = errno;
+                  goto LEAVE_FORK;
                 };
                 int redirect_fd = dup2(redirect, 0);
                 if (redirect_fd == -1) {
                   perror("dup2");
-                  exit(errno);
+                  fg_exit_status = errno;
+                  goto LEAVE_FORK;
                 };
-              } else {
-                errno = ENOENT;
-                exit(errno);
               };
 
             // > = write token
@@ -142,16 +140,15 @@ int main(int argc, const char* argv[]) {
                 int redirect = open(word_list[i], O_RDWR | O_CREAT, 0777);
                 if (redirect == -1) {
                   perror("redirect: open");
-                  exit(errno);
+                  fg_exit_status = errno;
+                  goto LEAVE_FORK;
                 };
                 int redirect_fd = dup2(redirect, 1);
                 if (redirect_fd == -1) {
                   perror("dup2");
-                  exit(errno);
+                  fg_exit_status = errno;
+                  goto LEAVE_FORK;
                 };
-              } else {
-                errno = ENOENT;
-                exit(errno);
               };
 
             // >> = append token
@@ -161,44 +158,36 @@ int main(int argc, const char* argv[]) {
                 int redirect = open(word_list[i], O_RDWR | O_APPEND | O_CREAT, 0777);
                 if (redirect == -1) {
                   perror("redirect: open");
-                  exit(errno);
+                  fg_exit_status = errno;
+                  goto LEAVE_FORK;
                 };
                 int redirect_fd = dup2(redirect, 1);
                 if (redirect_fd == -1) {
                   perror("dup2");
-                  exit(errno);
+                  fg_exit_status = errno;
+                  goto LEAVE_FORK;
                 };
-              } else {
-                errno = ENOENT;
-                exit(errno);
               };
 
             // & = background token
             } else if (!(strcmp(word_list[i], "&"))) {
-              i++;
+              continue;
 
-            // execution
+            // add args to cmd
             } else {
-              char* command = word_list[i];
-              char* arguments[MAX_WORDS] = {0};
-              int arg_i = 0;
-              i++;
-              
-              // add args to cmd
-              while (strcmp(word_list[i], "<") &&
-                  strcmp(word_list[i], ">") &&
-                  strcmp(word_list[i], ">>") &&
-                  strcmp(word_list[i], "&")) {
-                arguments[arg_i] = word_list[i];
-                i++;
-              };
-              
-              execvp(command, arguments);
-              perror("exec");
-              exit(errno);
-            }; 
+              arguments[arg_i] = word_list[i];
+              arg_i++; 
+            };
           };
-          
+            // execution
+            if (arg_i > 0) {
+              //for (int x = 0; x < arg_i; x++) printf("arg[%i] = %s\n", x, arguments[x]);
+              execvp(arguments[0], arguments);
+              perror("exec");
+              fg_exit_status = errno;
+              goto LEAVE_FORK;
+            };
+        LEAVE_FORK:;
           exiting = true;
           goto CLEAN_WORD_LIST;
         
@@ -209,12 +198,12 @@ int main(int argc, const char* argv[]) {
             child_pid = waitpid(child_pid, &child_status, 0);
             
             // set $? to exit stataus of foreground
-            if (WIFEXITED(child_pid)) {
-              fg_exit_status = WEXITSTATUS(child_pid);
-            } else {
+            if (WIFEXITED(child_status)) {
+              fg_exit_status = WEXITSTATUS(child_status);
             
             // if terminated by signal set $? to 128 + number of signal
-              fg_exit_status = 128 + WTERMSIG(child_pid);
+            } else {
+              fg_exit_status = 128 + WTERMSIG(child_status);
             };
 
           // default behavior: background indicated
@@ -239,7 +228,7 @@ CLEAN_WORD_LIST:;
 /* exit handlers */
 void cleanup(void){
   free(read_line);
-  if (fd) {
+  if (fd && (smallsh_pid == getpid())) {
     fclose(in_file);
     if (errno) {
       err(EXIT_FAILURE, "cleanup fclose failed");
@@ -258,6 +247,7 @@ void exit_proc(int total_words, char* word_list[MAX_WORDS]){
   // too many arguments
   if (total_words > 2) {
     errno = E2BIG;
+    fg_exit_status = errno;
     perror("exit");
     errno = 0;
     return;
@@ -269,6 +259,7 @@ void exit_proc(int total_words, char* word_list[MAX_WORDS]){
     // invalid argument type
     if (!user_exit_status) {
       errno = EINVAL;
+      fg_exit_status = errno;
       perror("exit");
       errno = 0;
       return;
@@ -289,6 +280,7 @@ void cd_proc(int total_words, char* word_list[MAX_WORDS]){
   // too many artuments
   if (total_words > 2) {
     errno = E2BIG;
+    fg_exit_status = errno;
     perror("cd");
     errno = 0;
 
@@ -298,6 +290,7 @@ void cd_proc(int total_words, char* word_list[MAX_WORDS]){
     // user defined path 
     chdir(word_list[1]);
     if (errno) {
+      fg_exit_status = errno;
       perror("cd");
       errno = 0;
     };
