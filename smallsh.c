@@ -5,6 +5,7 @@
 #include <err.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -16,11 +17,9 @@
 
 #define MAX_WORDS 512
 
-
 pid_t smallsh_pid;
 int fg_exit_status;
 pid_t bg_pid;
-bool exiting = false;
 
 FILE* in_file;
 int fd;
@@ -28,22 +27,42 @@ char* read_line = NULL;
 size_t n = 0;
 char* word_list[MAX_WORDS] = {0};
 
+void cleanup(void);
+void sigint_handler(int sig) {};
+
 void exit_proc(int total_words);
 void cd_proc(int total_words);
-
-void cleanup(void);
 
 int split_words(ssize_t char_count);
 void expand(char* word);
 
 int main(int argc, const char* argv[]) {
+  
+  // initialize shell variables ($$, $?, $!)
   smallsh_pid = getpid();
   fg_exit_status = 0;
   bg_pid = 0;
   
+  // initialize shell signals
+  // SIGTSTP (remove CTRL-Z functionality)
+  struct sigaction SIGTSTP_action = {0};
+  struct sigaction SIGTSTP_restore;
+  SIGTSTP_action.sa_handler = SIG_IGN;
+  if (sigaction(SIGTSTP, &SIGTSTP_action, &SIGTSTP_restore)) {
+    err(EXIT_FAILURE, "main sigaction SIGTSTSP failed");
+  };
+  // SIGINT (limit CTRL-C functionality)
+  struct sigaction SIGINT_action = {0};
+  struct sigaction SIGINT_restore;
+  SIGINT_action.sa_handler = sigint_handler;
+  if (sigaction(SIGINT, &SIGINT_action, &SIGINT_restore)) {
+    err(EXIT_FAILURE, "main sigaction SIGINT failed");
+  };
+
+
+
   // register exit handler
-  int handler_1 = atexit(cleanup);
-  if (handler_1) {
+  if (atexit(cleanup)) {
     err(EXIT_FAILURE, "main atexit failed");
   };
   
@@ -87,23 +106,22 @@ int main(int argc, const char* argv[]) {
 
     // get line of input 
     ssize_t char_read = getline(&read_line, &n, in_file);
-    if (char_read == -1){
+    if (errno == EINTR) {
+      clearerr(in_file);
+      errno = 0;
+      fprintf(stderr,"%c",'\n');
+      continue;
+    } else if (char_read == -1){
       exit(fg_exit_status); 
-    } else if (errno == EINVAL){
-      err(EXIT_FAILURE, "main getline failed");
     };
     
-    // word splitting
-    
+    // word splitting 
     int total_words = split_words(char_read);
 
     // expansion
-    //printf("total_words = %i\n", total_words);
     for (int i = 0; i < total_words; ++i) {
       expand(word_list[i]);
-      //printf("%s, ", word_list[i]);
     };
-    //printf("\n");
     int exec_i = 0;
     if (total_words > 0) {
           
@@ -116,18 +134,26 @@ int main(int argc, const char* argv[]) {
 
       // non built-in: fork to exec and parsing
       } else {
-      
-      // TODO reset signals here before calling child
-     
       pid_t child_pid;
       int child_status;
       child_pid = fork();
       switch(child_pid) {
         case -1:
           err(EXIT_FAILURE, "main fork failed");
+        
+        // child
         case 0:
 
           fg_exit_status = 0;
+          
+          // reset signals in child
+          if (sigaction(SIGTSTP, &SIGTSTP_restore, NULL)) {
+            err(EXIT_FAILURE, "main sigaction SIGTSTSP restore failed");
+          };
+          if (sigaction(SIGINT, &SIGINT_restore, NULL)) {
+            err(EXIT_FAILURE, "main sigaction SIGINT restore failed");
+          };
+          
           // parsing
           for (int i = 0; i < total_words; i++) {
             // < = read token
@@ -198,13 +224,6 @@ int main(int argc, const char* argv[]) {
             if (exec_i > 0) {
               word_list[exec_i] = NULL;
               exec_i++;
-              /*
-              printf("exec_i = %i\n", exec_i);
-              for (int x = 0; x < exec_i; x++) {
-                printf("%s, ", word_list[x]);
-              }; 
-              printf("\n");
-              */
               execvp(word_list[0], word_list);
               perror("exec");
               fg_exit_status = errno;
@@ -213,16 +232,27 @@ int main(int argc, const char* argv[]) {
         LEAVE_FORK:;
           exit(fg_exit_status);
         
+        // parent
         default:
+
           // waiting
+          
           // wait for foreground
           if ((strcmp(word_list[total_words - 1], "&"))) {
-            child_pid = waitpid(child_pid, &child_status, 0);
+            child_pid = waitpid(child_pid, &child_status, WUNTRACED);
             
             // set $? to exit stataus of foreground
             if (WIFEXITED(child_status)) {
               fg_exit_status = WEXITSTATUS(child_status);
             
+            // foreground exited by a signal
+            } else if (WIFSTOPPED(child_status)) {
+              fprintf(stderr, "Child process %d stopped. Continuing.\n", child_pid);
+              if (kill(child_pid, SIGCONT)) {
+                err(EXIT_FAILURE, "main waiting kill SIGCONT failed");
+              };
+              bg_pid = child_pid;
+              
             // if terminated by signal set $? to 128 + number of signal
             } else {
               fg_exit_status = 128 + WTERMSIG(child_status);
@@ -230,14 +260,17 @@ int main(int argc, const char* argv[]) {
 
           // default behavior: background indicated
           } else {
-            // set $! to bg pid
-            bg_pid = child_pid;
+          // set $! to bg pid
+          bg_pid = child_pid;
+          //waitid(P_PGID, 0, siginfo_t *infop, WNOWAIT);
           };
       };
       };
     };
   };
 };
+
+/*** handlers ***/
 
 /* exit handlers */
 void cleanup(void){
@@ -255,6 +288,7 @@ void cleanup(void){
     };
   };
 };
+
 
 /*** build in commands: exit, cd ***/
 
