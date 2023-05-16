@@ -23,7 +23,7 @@ pid_t bg_pid;
 
 FILE* in_file;
 int fd;
-char* read_line = NULL;
+char* read_line = 0;
 size_t n = 0;
 char* word_list[MAX_WORDS] = {0};
 
@@ -37,34 +37,6 @@ int split_words(ssize_t char_count);
 void expand(char* word);
 
 int main(int argc, const char* argv[]) {
-  
-  // initialize shell variables ($$, $?, $!)
-  smallsh_pid = getpid();
-  fg_exit_status = 0;
-  bg_pid = 0;
-  
-  // initialize shell signals
-  // SIGTSTP (remove CTRL-Z functionality)
-  struct sigaction SIGTSTP_action = {0};
-  struct sigaction SIGTSTP_restore;
-  SIGTSTP_action.sa_handler = SIG_IGN;
-  if (sigaction(SIGTSTP, &SIGTSTP_action, &SIGTSTP_restore)) {
-    err(EXIT_FAILURE, "main sigaction SIGTSTSP failed");
-  };
-  // SIGINT (limit CTRL-C functionality)
-  struct sigaction SIGINT_action = {0};
-  struct sigaction SIGINT_restore;
-  SIGINT_action.sa_handler = sigint_handler;
-  if (sigaction(SIGINT, &SIGINT_action, &SIGINT_restore)) {
-    err(EXIT_FAILURE, "main sigaction SIGINT failed");
-  };
-
-
-
-  // register exit handler
-  if (atexit(cleanup)) {
-    err(EXIT_FAILURE, "main atexit failed");
-  };
   
   bool interactive_mode = false;
   // too many arguments 
@@ -89,10 +61,35 @@ int main(int argc, const char* argv[]) {
       fcntl(fd, F_SETFD, flags);
     };
   };
+
+  // initialize shell variables ($$, $?, $!)
+  smallsh_pid = getpid();
+  fg_exit_status = 0;
+  bg_pid = 0;
+
+  // initialize shell signals
+  // SIGTSTP (remove CTRL-Z functionality)
+  struct sigaction SIGTSTP_action = {0};
+  struct sigaction SIGTSTP_restore;
+  SIGTSTP_action.sa_handler = SIG_IGN;
+  if (sigaction(SIGTSTP, &SIGTSTP_action, &SIGTSTP_restore)) {
+    err(EXIT_FAILURE, "main sigaction SIGTSTSP failed");
+  };
+  // SIGINT (limit CTRL-C functionality)
+  struct sigaction SIGINT_action = {0};
+  struct sigaction SIGINT_restore;
+  SIGINT_action.sa_handler = sigint_handler;
+  if (sigaction(SIGINT, &SIGINT_action, &SIGINT_restore)) {
+    err(EXIT_FAILURE, "main sigaction SIGINT failed");
+  };
+
+  // register exit handler
+  if (atexit(cleanup)) {
+    err(EXIT_FAILURE, "main atexit failed");
+  };
   
   //repl
   char* prompt = getenv("PS1");
-  expand(prompt);
   for (;;) {
 
     // manage background process
@@ -153,14 +150,14 @@ int main(int argc, const char* argv[]) {
           if (sigaction(SIGINT, &SIGINT_restore, NULL)) {
             err(EXIT_FAILURE, "main sigaction SIGINT restore failed");
           };
-          
+
           // parsing
           for (int i = 0; i < total_words; i++) {
             // < = read token
             if (!(strcmp(word_list[i], "<"))) {
               i++;
               if (i < total_words){
-                int redirect = open(word_list[i], O_RDONLY);
+                int redirect = open(word_list[i], O_RDONLY | O_CLOEXEC);
                 if (redirect == -1) {
                   perror("redirect: open");
                   fg_exit_status = errno;
@@ -178,7 +175,7 @@ int main(int argc, const char* argv[]) {
             } else if (!(strcmp(word_list[i], ">"))) {
               i++;
               if (i < total_words){
-                int redirect = open(word_list[i], O_RDWR | O_CREAT, 0777);
+                int redirect = open(word_list[i], O_RDWR | O_TRUNC | O_CREAT, 0777);
                 if (redirect == -1) {
                   perror("redirect: open");
                   fg_exit_status = errno;
@@ -216,14 +213,18 @@ int main(int argc, const char* argv[]) {
 
             // add args to cmd
             } else {
+              if (exec_i < i) {
+                free(word_list[exec_i]);
+              };
               word_list[exec_i] = word_list[i];
-              exec_i++; 
+              exec_i++;
+              
             };
           };
             // execution
             if (exec_i > 0) {
-              word_list[exec_i] = NULL;
-              exec_i++;
+              word_list[exec_i] = realloc(word_list[exec_i], **word_list * 1);
+              word_list[exec_i] = 0;
               execvp(word_list[0], word_list);
               perror("exec");
               fg_exit_status = errno;
@@ -274,17 +275,16 @@ int main(int argc, const char* argv[]) {
 
 /* exit handlers */
 void cleanup(void){
-  free(read_line);
-  for (int x = 0; x < MAX_WORDS; x++) {
-    word_list[x] = NULL;
-  };
   if (smallsh_pid == getpid()) {
+    free(read_line);
     for (int x = 0; x < MAX_WORDS; x++) {
       free(word_list[x]);
     };
-    fclose(in_file);
-    if (errno) {
-      err(EXIT_FAILURE, "cleanup fclose failed");
+    if (in_file){
+      fclose(in_file);
+      if (errno) {
+        err(EXIT_FAILURE, "cleanup fclose failed");
+      };
     };
   };
 };
