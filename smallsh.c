@@ -98,15 +98,18 @@ int main(int argc, const char* argv[]) {
     };
 
     // get line of input
+    // sig handler for input line
     SIGINT_action.sa_handler = sigint_handler;
     if (sigaction(SIGINT, &SIGINT_action, 0)) {
       err(EXIT_FAILURE, "main sigaction SIGINT failed");
     };
     ssize_t char_read = getline(&read_line, &n, in_file);
+    // reset disposition
     SIGINT_action.sa_handler = SIG_IGN;
     if (sigaction(SIGINT, &SIGINT_action, 0)) {
       err(EXIT_FAILURE, "main sigaction SIGINT failed");
     };
+    
     if (errno == EINTR) {
       clearerr(in_file);
       errno = 0;
