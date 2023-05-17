@@ -1,0 +1,6 @@
+echo Hello World! # This is a comment
+cd tests
+ls
+cd
+exit 8
+
