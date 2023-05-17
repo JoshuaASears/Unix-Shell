@@ -1,2 +1,2 @@
 smallsh: smallsh.c
-  gcc -std=c99 -o smallsh smallsh.c
+  gcc -std=c99 -g -o smallsh smallsh.c

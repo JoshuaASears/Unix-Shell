@@ -34,7 +34,7 @@ void exit_proc(int total_words);
 void cd_proc(int total_words);
 
 int split_words(ssize_t char_count);
-void expand(char* word);
+void expand(int word_index);
 
 int main(int argc, const char* argv[]) {
   
@@ -91,12 +91,8 @@ int main(int argc, const char* argv[]) {
   //repl
   char* prompt = getenv("PS1");
   for (;;) {
-
-    // manage background process
     
-    //fprintf(stderr, "Child process %jd done. Exit status %d.\n", (intmax_t) <pid>, <exit_status>);
-    //fprintf(stderr, "Child process %jd done. Signaled %d.\n", (intmax_t) <pid>, <signal number>);
-    
+    // print prompt 
     if (interactive_mode) {
       fprintf(stderr, "%s", prompt);
     };
@@ -112,12 +108,24 @@ int main(int argc, const char* argv[]) {
       exit(fg_exit_status); 
     };
     
+    pid_t child_pid;
+    int child_status;
+    int bg_child_status;
+    // manage background process
+    if (bg_pid == waitpid(0, &bg_child_status, WNOHANG)) {
+      if (WIFEXITED(bg_child_status)) {
+        fprintf(stderr, "Child process %jd done. Exit status %d.\n", (intmax_t) bg_pid, WEXITSTATUS(bg_child_status));
+      } else if (WIFSIGNALED(bg_child_status)) {
+        fprintf(stderr, "Child process %jd done. Signaled %d.\n", (intmax_t) bg_pid, WTERMSIG(bg_child_status));
+      };
+    };
+    errno = 0;
     // word splitting 
     int total_words = split_words(char_read);
 
     // expansion
     for (int i = 0; i < total_words; ++i) {
-      expand(word_list[i]);
+      expand(i);
     };
     int exec_i = 0;
     if (total_words > 0) {
@@ -131,8 +139,6 @@ int main(int argc, const char* argv[]) {
 
       // non built-in: fork to exec and parsing
       } else {
-      pid_t child_pid;
-      int child_status;
       child_pid = fork();
       switch(child_pid) {
         case -1:
@@ -263,7 +269,6 @@ int main(int argc, const char* argv[]) {
           } else {
           // set $! to bg pid
           bg_pid = child_pid;
-          //waitid(P_PGID, 0, siginfo_t *infop, WNOWAIT);
           };
       };
       };
@@ -368,7 +373,6 @@ void cd_proc(int total_words){
  * returns number of words split from line
  * */
 int split_words(ssize_t char_count) {
-  
   int word_count = 0;
   size_t word_length = 0;
   bool backslash = false;
@@ -418,36 +422,31 @@ int split_words(ssize_t char_count) {
 /* 
  * expands words for special character ($) variables
  * */
-void expand (char *word) {
+void expand (int word_index) {
   
-  // get word length
-  size_t word_length = 0;
-  for (int count = 0; word[count] != '\0'; count++) {
-    word_length++;
-  };
-
+  size_t word_length = strlen(word_list[word_index]);
   int start = 0;
   int stop = 0;
-
   // iterate over word
-  for (int i = 0; i < word_length; i++) {
-    if (word[i] == '$' && i+1 < word_length) {
+  int i = 0;
+  while (i < word_length) {
+    if (word_list[word_index][i] == '$' && i+1 < word_length) {
       start = i;
       i++;
 
       // find special character sequences
-      if (word[i] == 0x7b) {
+      if (word_list[word_index][i] == 0x7b) {
         while (i < word_length) {
           i++;
-          if (word[i] == '}') {
+          if (word_list[word_index][i] == '}') {
             stop = i;
             break;
           };
         };
       } else if (
-          word[i] == '$' ||
-          word[i] == '!' ||
-          word[i] == '?') {
+          word_list[word_index][i] == '$' ||
+          word_list[word_index][i] == '!' ||
+          word_list[word_index][i] == '?') {
           stop = i;
       };
 
@@ -456,16 +455,21 @@ void expand (char *word) {
       if (stop) {
         // copy before splice string
         int s1_len = start;
-        char* before_splice = strndup(word, s1_len);
+        char* before_splice = strndup(word_list[word_index], s1_len);
+        if (errno) {
+          err(EXIT_FAILURE, "expand: strndup before_splice");
+        }; 
         
         // copy after splice string
         int s3_len = word_length - stop;
-        char* after_splice = strndup(&word[stop+1], s3_len);
-        
+        char* after_splice = strndup(&word_list[word_index][stop+1], s3_len);
+        if (errno) {
+          err(EXIT_FAILURE, "expand: strndup after_splice");
+        }; 
         // splice_string
         int splice_size = 0;
         int splice_start = 0;
-        if (word[start+1] != 0x7b) {
+        if (word_list[word_index][start+1] != 0x7b) {
           splice_size = stop - start + 1;
           splice_start = start;
         } else {
@@ -474,43 +478,70 @@ void expand (char *word) {
         };
         if (splice_size > 0) { 
           // character case handling
-          char* splice = strndup(&word[splice_start], splice_size);
-          char replacement[255] = {'\0'};
+          char* splice = strndup(&word_list[word_index][splice_start], splice_size);
+          if (errno) {
+            err(EXIT_FAILURE, "expand: strndup splice");
+          }; 
+          char* replacement = malloc(7);
+          //char replacement[255] = {'\0'};
           if (splice[1] == '$') {
 
           // $$: replace with PID
             sprintf(replacement, "%d", smallsh_pid);
+            if (errno) {
+              err(EXIT_FAILURE, "expand: sprintf $$ replace");
+            }; 
 
           // $?: replace with exit status of last foreground command or 0
           } else if (splice[1] == '?') {
             sprintf(replacement, "%d", fg_exit_status);
+            if (errno) {
+              err(EXIT_FAILURE, "expand: sprintf $? replace");
+            }; 
 
           // $!: replace with PID of most recent background process or empty str
           } else if (splice[1] == '!') {
               if (bg_pid) {
                 sprintf(replacement, "%d", bg_pid);
+                if (errno) {
+                  err(EXIT_FAILURE, "expand: sprintf $! replace");
+                }; 
               };
 
           // ${parameter}: replace with value of environment variable or empty str
           } else {
-            strcpy(replacement, getenv(splice)); 
+            char* get_temp = getenv(splice);
+            if (get_temp) {
+              replacement = realloc(replacement, sizeof (char*) * (strlen(get_temp)+ 1));
+              strcpy(replacement, get_temp);
+            } else {
+              replacement = realloc(replacement, 1);
+            };
           };
-        
           // word_list[word_index] realloc to the three items above
-          int s2_len = strlen(replacement); 
-          word = realloc(word, sizeof s1_len + s2_len + s3_len + 1);
-          strcpy(word, before_splice);
-          strcpy(&word[s1_len], replacement);
-          strcpy(&word[s1_len+s2_len], after_splice);
-        
-          // cleanup
+          
+          int s2_len = strlen(replacement);
+          word_length = s1_len + s2_len + s3_len;
+          i = s1_len;
+          word_list[word_index] = realloc(word_list[word_index], word_length);
+          
+          strcpy(&word_list[word_index][0], before_splice);
+          if (s2_len > 0) {
+            strcpy(&word_list[word_index][s1_len], replacement);
+          };
+          strcpy(&word_list[word_index][s1_len+s2_len], after_splice);
+          
+          word_list[word_index][word_length] = '\0';
+          free(replacement); 
+          free(before_splice);
+          free(after_splice);
           free(splice);
         };
-        free(before_splice);
-        free(after_splice);
         stop = 0;
+        continue;
       };
     };
+    i++;
   };
 };
 
