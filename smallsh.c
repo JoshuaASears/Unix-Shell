@@ -78,11 +78,11 @@ int main(int argc, const char* argv[]) {
   // SIGINT (limit CTRL-C functionality)
   struct sigaction SIGINT_action = {0};
   struct sigaction SIGINT_restore;
-  SIGINT_action.sa_handler = sigint_handler;
+  SIGINT_action.sa_handler = SIG_IGN;
   if (sigaction(SIGINT, &SIGINT_action, &SIGINT_restore)) {
     err(EXIT_FAILURE, "main sigaction SIGINT failed");
   };
-
+  
   // register exit handler
   if (atexit(cleanup)) {
     err(EXIT_FAILURE, "main atexit failed");
@@ -91,14 +91,22 @@ int main(int argc, const char* argv[]) {
   //repl
   char* prompt = getenv("PS1");
   for (;;) {
-    
+
     // print prompt 
     if (interactive_mode) {
       fprintf(stderr, "%s", prompt);
     };
 
-    // get line of input 
+    // get line of input
+    SIGINT_action.sa_handler = sigint_handler;
+    if (sigaction(SIGINT, &SIGINT_action, 0)) {
+      err(EXIT_FAILURE, "main sigaction SIGINT failed");
+    };
     ssize_t char_read = getline(&read_line, &n, in_file);
+    SIGINT_action.sa_handler = SIG_IGN;
+    if (sigaction(SIGINT, &SIGINT_action, 0)) {
+      err(EXIT_FAILURE, "main sigaction SIGINT failed");
+    };
     if (errno == EINTR) {
       clearerr(in_file);
       errno = 0;
@@ -107,6 +115,7 @@ int main(int argc, const char* argv[]) {
     } else if (char_read == -1){
       exit(fg_exit_status); 
     };
+    SIGINT_action.sa_handler = SIG_IGN;
     
     pid_t child_pid;
     int child_status;
@@ -117,8 +126,14 @@ int main(int argc, const char* argv[]) {
         fprintf(stderr, "Child process %jd done. Exit status %d.\n", (intmax_t) bg_pid, WEXITSTATUS(bg_child_status));
       } else if (WIFSIGNALED(bg_child_status)) {
         fprintf(stderr, "Child process %jd done. Signaled %d.\n", (intmax_t) bg_pid, WTERMSIG(bg_child_status));
+      } else if (WIFSTOPPED(bg_child_status)) {
+        fprintf(stderr, "Child process %d stopped. Continuing.\n", bg_pid);
+        if (kill(bg_pid, SIGCONT)) {
+          err(EXIT_FAILURE, "main waiting kill SIGCONT failed");
+        };
       };
     };
+
     errno = 0;
     // word splitting 
     int total_words = split_words(char_read);
@@ -270,6 +285,7 @@ int main(int argc, const char* argv[]) {
           // set $! to bg pid
           bg_pid = child_pid;
           };
+    
       };
       };
     };
@@ -483,7 +499,6 @@ void expand (int word_index) {
             err(EXIT_FAILURE, "expand: strndup splice");
           }; 
           char* replacement = malloc(7);
-          //char replacement[255] = {'\0'};
           if (splice[1] == '$') {
 
           // $$: replace with PID
@@ -512,10 +527,18 @@ void expand (int word_index) {
           } else {
             char* get_temp = getenv(splice);
             if (get_temp) {
-              replacement = realloc(replacement, sizeof (char*) * (strlen(get_temp)+ 1));
+              void* temp_p1 = realloc(replacement, sizeof (char*) * (strlen(get_temp)+ 1));
+              if (errno == ENOMEM) {
+                err(EXIT_FAILURE, "expand ${parameter} realloc 1 failed");
+              };
+              replacement = temp_p1;
               strcpy(replacement, get_temp);
             } else {
-              replacement = realloc(replacement, 1);
+              void* temp_p2 = realloc(replacement, 1);
+              if (errno == ENOMEM) {
+                err(EXIT_FAILURE, "expand ${parameter} realloc 2 failed");
+              };
+              replacement = temp_p2;
             };
           };
           // word_list[word_index] realloc to the three items above
@@ -523,15 +546,21 @@ void expand (int word_index) {
           int s2_len = strlen(replacement);
           word_length = s1_len + s2_len + s3_len;
           i = s1_len;
-          word_list[word_index] = realloc(word_list[word_index], word_length);
-          
-          strcpy(&word_list[word_index][0], before_splice);
+          void* temp_p3 = realloc(word_list[word_index], word_length);
+          if (errno == ENOMEM) {
+            err(EXIT_FAILURE, "expand realloc 3 failed");
+          };
+          word_list[word_index] = temp_p3; 
+          if (s1_len > 0) {
+            strcpy(&word_list[word_index][0], before_splice);
+          };
           if (s2_len > 0) {
             strcpy(&word_list[word_index][s1_len], replacement);
           };
-          strcpy(&word_list[word_index][s1_len+s2_len], after_splice);
-          
-          word_list[word_index][word_length] = '\0';
+          if (s3_len > 0) {
+            strcpy(&word_list[word_index][s1_len+s2_len], after_splice);
+          };
+          //word_list[word_index][word_length] = '\0';
           free(replacement); 
           free(before_splice);
           free(after_splice);
