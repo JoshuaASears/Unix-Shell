@@ -442,138 +442,110 @@ int split_words(ssize_t char_count) {
  * expands words for special character ($) variables
  * */
 void expand (int word_index) {
+  int buffer_index = 0;
+  int start_indicator = -1;
+  int stop_indicator = -1;
+  int start_parameter = -1;
+  int stop_parameter = -1;
+  int copied_counter = -1;
+
+  char* word = word_list[word_index];
+  size_t word_length = strlen(word);
+
+  // buffer to add characters of new word to
+  char expansion_buffer[256] = {0};
   
-  size_t word_length = strlen(word_list[word_index]);
-  int start = 0;
-  int stop = 0;
-  // iterate over word
-  int i = 0;
-  while (i < word_length) {
-    if (word_list[word_index][i] == '$' && i+1 < word_length) {
-      start = i;
-      i++;
-
-      // find special character sequences
-      if (word_list[word_index][i] == 0x7b) {
-        while (i < word_length) {
-          i++;
-          if (word_list[word_index][i] == '}') {
-            stop = i;
-            break;
-          };
-        };
-      } else if (
-          word_list[word_index][i] == '$' ||
-          word_list[word_index][i] == '!' ||
-          word_list[word_index][i] == '?') {
-          stop = i;
+  int index = 0;
+  // find start indicator
+  while (index < word_length) {
+    while (index < word_length && start_indicator < 0) {
+      if (word[index] == '$' && index + 1 < word_length) {
+        start_indicator = index;
+      } else {
+        expansion_buffer[buffer_index] = word[index];
+        buffer_index++;
       };
-
-      // if special character start and stop indexes have been found
-      // splice out special characters
-      if (stop) {
-        // copy before splice string
-        int s1_len = start;
-        char* before_splice = strndup(word_list[word_index], s1_len);
-        if (errno) {
-          err(EXIT_FAILURE, "expand: strndup before_splice");
-        }; 
-        
-        // copy after splice string
-        int s3_len = word_length - stop;
-        char* after_splice = strndup(&word_list[word_index][stop+1], s3_len);
-        if (errno) {
-          err(EXIT_FAILURE, "expand: strndup after_splice");
-        }; 
-        // splice_string
-        int splice_size = 0;
-        int splice_start = 0;
-        if (word_list[word_index][start+1] != 0x7b) {
-          splice_size = stop - start + 1;
-          splice_start = start;
-        } else {
-          splice_size = stop - start - 2;
-          splice_start = start + 2;
+      index++;
+    };
+    // find stop indicator and replace variable
+    // $$ = smallsh pid
+    if (word[index] == '$') {
+      copied_counter = sprintf(&expansion_buffer[buffer_index], "%d", smallsh_pid);
+      buffer_index = buffer_index + copied_counter;
+      start_indicator = -1;
+    // $? = exit status of last foreground process, default 0
+    } else if (word[index] == '?') {
+      copied_counter = sprintf(&expansion_buffer[buffer_index], "%d", fg_exit_status);
+      buffer_index = buffer_index + copied_counter;
+      start_indicator = -1;
+    // $! = pid of last background process, default empty string
+    } else if (word[index] == '!') {
+      if (bg_pid) {
+        copied_counter = sprintf(&expansion_buffer[buffer_index], "%d", bg_pid);
+        buffer_index = buffer_index + copied_counter;
+      };
+      start_indicator = -1;
+    // ${parameter}
+    } else if (word[index] == 0x7b && index + 1 < word_length) {
+      index++;
+      // traverse to find end bracket
+      while (index < word_length) {
+        index++;
+        if (word[index] == 0x7d) {
+          stop_indicator = index;
+          stop_parameter = index - 1;
+          start_parameter = start_indicator + 2;
+          break;
         };
-        if (splice_size > 0) { 
-          // character case handling
-          char* splice = strndup(&word_list[word_index][splice_start], splice_size);
-          if (errno) {
-            err(EXIT_FAILURE, "expand: strndup splice");
-          }; 
-          char* replacement = malloc(7);
-          if (splice[1] == '$') {
-
-          // $$: replace with PID
-            sprintf(replacement, "%d", smallsh_pid);
-            if (errno) {
-              err(EXIT_FAILURE, "expand: sprintf $$ replace");
-            }; 
-
-          // $?: replace with exit status of last foreground command or 0
-          } else if (splice[1] == '?') {
-            sprintf(replacement, "%d", fg_exit_status);
-            if (errno) {
-              err(EXIT_FAILURE, "expand: sprintf $? replace");
-            }; 
-
-          // $!: replace with PID of most recent background process or empty str
-          } else if (splice[1] == '!') {
-              if (bg_pid) {
-                sprintf(replacement, "%d", bg_pid);
-                if (errno) {
-                  err(EXIT_FAILURE, "expand: sprintf $! replace");
-                }; 
-              };
-
-          // ${parameter}: replace with value of environment variable or empty str
-          } else {
-            char* get_temp = getenv(splice);
-            if (get_temp) {
-              void* temp_p1 = realloc(replacement, sizeof (char*) * (strlen(get_temp)+ 1));
-              if (errno == ENOMEM) {
-                err(EXIT_FAILURE, "expand ${parameter} realloc 1 failed");
-              };
-              replacement = temp_p1;
-              strcpy(replacement, get_temp);
-            } else {
-              void* temp_p2 = realloc(replacement, 1);
-              if (errno == ENOMEM) {
-                err(EXIT_FAILURE, "expand ${parameter} realloc 2 failed");
-              };
-              replacement = temp_p2;
-            };
+      };
+      // end bracket found
+      if (stop_indicator >= 0) {
+        if (stop_parameter >= start_parameter) {
+          char parameter_buffer[256] = {0};
+          strncpy(parameter_buffer, &word[start_parameter], stop_parameter - start_parameter + 1);
+          char* env_buffer = getenv(parameter_buffer);
+          if (env_buffer) {
+            int env_length = strlen(env_buffer);
+            strcpy(&expansion_buffer[buffer_index], env_buffer);
+            buffer_index = buffer_index + env_length;
           };
-          // word_list[word_index] realloc to the three items above
-          
-          int s2_len = strlen(replacement);
-          word_length = s1_len + s2_len + s3_len;
-          i = s1_len;
-          void* temp_p3 = realloc(word_list[word_index], word_length);
-          if (errno == ENOMEM) {
-            err(EXIT_FAILURE, "expand realloc 3 failed");
-          };
-          word_list[word_index] = temp_p3; 
-          if (s1_len > 0) {
-            strcpy(&word_list[word_index][0], before_splice);
-          };
-          if (s2_len > 0) {
-            strcpy(&word_list[word_index][s1_len], replacement);
-          };
-          if (s3_len > 0) {
-            strcpy(&word_list[word_index][s1_len+s2_len], after_splice);
-          };
-          //word_list[word_index][word_length] = '\0';
-          free(replacement); 
-          free(before_splice);
-          free(after_splice);
-          free(splice);
         };
-        stop = 0;
+      // end bracket not found
+      } else {
+        index = start_indicator;
+        start_indicator = -1;
+        expansion_buffer[buffer_index] = word[index];
+        buffer_index++;
+        index++;
+        expansion_buffer[buffer_index] = word[index];
+        buffer_index++;
+        index++;
         continue;
       };
+      start_indicator = -1;
+      start_parameter = -1;
+      stop_indicator = -1;
+      stop_parameter = -1;
+    // stop indicator not found 
+    } else {
+      if (start_indicator >= 0) {
+        start_indicator = -1;
+        expansion_buffer[buffer_index] = word[index-1];
+        buffer_index++;
+      };
+      expansion_buffer[buffer_index] = word[index];
+      index++;
+      continue;
     };
-    i++;
+    index++;
   };
+  // copy new string from buffer to word_list[word_index] string pointer
+  int final_length = strlen(expansion_buffer);
+  void* temp_ptr = realloc(word_list[word_index], final_length + 1);
+  if (errno == ENOMEM) {
+    err(EXIT_FAILURE, "expand realloc failed");
+  };
+  word_list[word_index] = temp_ptr;
+  strcpy(word_list[word_index], expansion_buffer);
 };
-
+    
