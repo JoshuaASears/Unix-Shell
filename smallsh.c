@@ -124,11 +124,11 @@ int main(int argc, const char* argv[]) {
     int child_status;
     int bg_child_status;
     // manage background process
-    if (bg_pid == waitpid(0, &bg_child_status, WNOHANG)) {
+    if (bg_pid == waitpid(0, &bg_child_status, WNOHANG | WUNTRACED)) {
       if (WIFEXITED(bg_child_status)) {
         fprintf(stderr, "Child process %jd done. Exit status %d.\n", (intmax_t) bg_pid, WEXITSTATUS(bg_child_status));
       } else if (WIFSIGNALED(bg_child_status)) {
-        fprintf(stderr, "Child process %jd done. Signaled %d.\n", (intmax_t) bg_pid, WTERMSIG(bg_child_status));
+          fprintf(stderr, "Child process %jd done. Signaled %d.\n", (intmax_t) bg_pid, WTERMSIG(bg_child_status));
       } else if (WIFSTOPPED(bg_child_status)) {
         fprintf(stderr, "Child process %d stopped. Continuing.\n", bg_pid);
         if (kill(bg_pid, SIGCONT)) {
@@ -136,7 +136,6 @@ int main(int argc, const char* argv[]) {
         };
       };
     };
-
     errno = 0;
     // word splitting 
     int total_words = split_words(char_read);
@@ -505,9 +504,9 @@ void expand (int word_index) {
           strncpy(parameter_buffer, &word[start_parameter], stop_parameter - start_parameter + 1);
           char* env_buffer = getenv(parameter_buffer);
           if (env_buffer) {
-            int env_length = strlen(env_buffer);
+            copied_counter = strlen(env_buffer);
             strcpy(&expansion_buffer[buffer_index], env_buffer);
-            buffer_index = buffer_index + env_length;
+            buffer_index = buffer_index + copied_counter;
           };
         };
       // end bracket not found
@@ -534,6 +533,7 @@ void expand (int word_index) {
         buffer_index++;
       };
       expansion_buffer[buffer_index] = word[index];
+      buffer_index++;
       index++;
       continue;
     };
